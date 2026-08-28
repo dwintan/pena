@@ -215,6 +215,22 @@ div[data-testid="stCheckbox"] label p {
     margin-bottom: 20px !important;
 }
 
+/* ============================================================
+   DATE INPUT — FONT
+   ============================================================ */
+
+section[data-testid="stSidebar"]
+div[data-testid="stDateInput"] [data-type="day"],
+section[data-testid="stSidebar"]
+div[data-testid="stDateInput"] [data-type="month"],
+section[data-testid="stSidebar"]
+div[data-testid="stDateInput"] [data-type="year"] {
+    font-family: "Inter", sans-serif !important;
+
+    font-size: 12px !important;
+    font-weight: 500 !important;
+}
+
 /* Card tanggal */
 
 /* Container tanggal */
@@ -1029,3 +1045,16 @@ div[data-testid="stButton"] button {
 section[data-testid="stSidebar"] .date-label {
     font-family: "Inter", sans-serif !important;
 }
+
+/* Loading / Spinner */
+div[data-testid="stSpinner"] {
+    margin-top: 18px !important;
+    padding-top: 8px !important;
+    position: relative !important;
+    z-index: 10 !important;
+}
+
+div[data-testid="stSpinner"] > div {
+    margin-top: 25px !important;
+}
+
