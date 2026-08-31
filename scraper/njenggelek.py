@@ -147,7 +147,7 @@ def scrape_search(
 
     while True:
 
-        print(f"Scraping Njenggelek halaman {page}")
+        # print(f"Scraping Njenggelek halaman {page}")
 
         url = (
             f"{BASE_URL}/search"
