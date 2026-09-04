@@ -3,7 +3,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from datetime import datetime, timedelta, date
-import time
+from concurrent.futures import ThreadPoolExecutor
 import re
 
 
@@ -53,7 +53,6 @@ def parse_date(text):
     # -----------------------------------------
     # Format: "23 jam lalu"
     # -----------------------------------------
-
     match = re.search(
         r"(\d+)\s+jam lalu",
         text,
@@ -68,7 +67,6 @@ def parse_date(text):
     # -----------------------------------------
     # Format: "2 hari lalu"
     # -----------------------------------------
-
     match = re.search(
         r"(\d+)\s+hari lalu",
         text,
@@ -81,15 +79,28 @@ def parse_date(text):
         )
 
     # -----------------------------------------
+    # Format tanggal: DD-MM-YYYY
+    # Contoh: 30-08-2026
+    # -----------------------------------------
+    for fmt in (
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%d.%m.%Y"
+    ):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+
+    # -----------------------------------------
     # Format: "12 Agu 2026"
     # -----------------------------------------
-
     parts = text.split()
 
     if len(parts) == 3:
         try:
             hari = int(parts[0])
-            bulan = BULAN.get(parts[1])
+            bulan = BULAN.get(parts[1].capitalize())
             tahun = int(parts[2])
 
             if bulan:
@@ -103,7 +114,6 @@ def parse_date(text):
             pass
 
     return None
-
 
 # ============================================================
 # KONVERSI INPUT TANGGAL
@@ -303,6 +313,27 @@ def scrape_article(url):
 
 
 # ============================================================
+# AMBIL DETAIL ARTIKEL (UNTUK THREAD)
+# ============================================================
+
+def _scrape_detail_item(item):
+    """Ambil detail artikel tanpa mengubah struktur hasil scraper."""
+    link, title_card, tanggal, kategori = item
+
+    article = scrape_article(link)
+
+    # Tetap masukkan data dari halaman pencarian jika detail gagal.
+    article["Tanggal"] = tanggal.date()
+
+    if not article["Judul"]:
+        article["Judul"] = title_card
+
+    article["Kategori"] = kategori
+
+    return article
+
+
+# ============================================================
 # SCRAPE SEARCH
 # ============================================================
 
@@ -316,13 +347,8 @@ def scrape_search(
     # NORMALISASI TANGGAL
     # ========================================================
 
-    start_date = convert_input_date(
-        start_date
-    )
-
-    end_date = convert_input_date(
-        end_date
-    )
+    start_date = convert_input_date(start_date)
+    end_date = convert_input_date(end_date)
 
     # Tanggal akhir mencakup satu hari penuh
     if end_date:
@@ -338,232 +364,197 @@ def scrape_search(
     stop_scraping = False
 
     # ========================================================
-    # SCRAPE SEMUA HALAMAN
+    # THREAD DETAIL ARTIKEL
     # ========================================================
+    # Halaman pencarian tetap diambil berurutan, tetapi halaman
+    # detail beberapa artikel diambil bersamaan. Ini bagian yang
+    # paling banyak memakan waktu pada scraper lama.
+    MAX_WORKERS = 5
 
-    while not stop_scraping:
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 
-        print(
-            f"\nScraping Kabar Trenggalek halaman {page}"
-        )
+        # ========================================================
+        # SCRAPE SEMUA HALAMAN
+        # ========================================================
 
-        url = f"{BASE_URL}/cari"
+        while not stop_scraping:
 
-        params = {
-            "q": keyword,
-            "page": page
-        }
+            print(f"\\nScraping Kabar Trenggalek halaman {page}")
 
-        try:
-            response = requests.get(
-                url,
-                params=params,
-                headers=HEADERS,
-                timeout=20
-            )
-
-        except requests.RequestException as e:
-            print(
-                "Gagal request halaman:",
-                e
-            )
-            break
-
-        if response.status_code != 200:
-            print(
-                "Status:",
-                response.status_code
-            )
-            break
-
-        soup = BeautifulSoup(
-            response.text,
-            "lxml"
-        )
-
-        # ====================================================
-        # CARD ARTIKEL UI BARU
-        # ====================================================
-
-        cards = soup.select(
-            "article.article-card--list"
-        )
-
-        print(
-            f"Ditemukan {len(cards)} artikel"
-        )
-
-        if not cards:
-            break
-
-        # ====================================================
-        # LOOP ARTIKEL
-        # ====================================================
-
-        for card in cards:
+            url = f"{BASE_URL}/cari"
+            params = {
+                "q": keyword,
+                "page": page
+            }
 
             try:
-
-                # --------------------------------------------
-                # LINK
-                # --------------------------------------------
-
-                link_tag = card.select_one(
-                    "h3 a"
+                response = requests.get(
+                    url,
+                    params=params,
+                    headers=HEADERS,
+                    timeout=20
                 )
+            except requests.RequestException as e:
+                print("Gagal request halaman:", e)
+                break
 
-                if not link_tag:
-                    continue
+            if response.status_code != 200:
+                print("Status:", response.status_code)
+                break
 
-                href = link_tag.get("href")
+            soup = BeautifulSoup(response.text, "lxml")
 
-                if not href:
-                    continue
+            # ====================================================
+            # CARD ARTIKEL UI BARU
+            # ====================================================
 
-                link = urljoin(
-                    BASE_URL,
-                    href
-                )
+            cards = soup.select("article.article-card--list")
 
-                # --------------------------------------------
-                # JUDUL DARI CARD
-                # --------------------------------------------
+            print(f"Ditemukan {len(cards)} artikel")
 
-                title_card = link_tag.get_text(
-                    " ",
-                    strip=True
-                )
+            if not cards:
+                break
 
-                # --------------------------------------------
-                # TANGGAL
-                # --------------------------------------------
+            # Menampung artikel yang lolos filter tanggal.
+            # Detailnya nanti di-request secara paralel.
+            detail_items = []
 
-                tanggal_tag = card.select_one(
-                    "span.article-card-time"
-                )
+            # ====================================================
+            # BACA CARD ARTIKEL
+            # ====================================================
 
-                if not tanggal_tag:
-                    continue
+            for card in cards:
+                try:
+                    # --------------------------------------------
+                    # LINK
+                    # --------------------------------------------
+                    link_tag = card.select_one("h3 a")
 
-                tanggal_text = tanggal_tag.get_text(
-                    " ",
-                    strip=True
-                )
+                    if not link_tag:
+                        continue
 
-                tanggal = parse_date(
-                    tanggal_text
-                )
+                    href = link_tag.get("href")
 
-                if tanggal is None:
-                    print(
-                        "Tanggal tidak dikenali:",
-                        tanggal_text
+                    if not href:
+                        continue
+
+                    link = urljoin(BASE_URL, href)
+
+                    # --------------------------------------------
+                    # JUDUL DARI CARD
+                    # --------------------------------------------
+                    title_card = link_tag.get_text(" ", strip=True)
+
+                    # --------------------------------------------
+                    # TANGGAL
+                    # --------------------------------------------
+                    tanggal_tag = card.select_one(
+                        "span.article-card-time"
                     )
-                    continue
 
-                # --------------------------------------------
-                # FILTER TANGGAL
-                # --------------------------------------------
+                    if not tanggal_tag:
+                        continue
 
-                if end_date and tanggal > end_date:
-                    continue
-
-                if start_date and tanggal < start_date:
-                    stop_scraping = True
-                    break
-
-                # --------------------------------------------
-                # KATEGORI
-                # --------------------------------------------
-
-                kategori = ""
-
-                kategori_tag = card.select_one(
-                    "a.article-card-kicker"
-                )
-
-                if kategori_tag:
-                    kategori = kategori_tag.get_text(
+                    tanggal_text = tanggal_tag.get_text(
                         " ",
                         strip=True
                     )
 
-                # --------------------------------------------
-                # DETAIL ARTIKEL
-                # --------------------------------------------
+                    tanggal = parse_date(tanggal_text)
 
-                article = scrape_article(
-                    link
-                )
+                    if tanggal is None:
+                        print(
+                            "Tanggal tidak dikenali:",
+                            tanggal_text
+                        )
+                        continue
 
-                # Jangan pernah membuang artikel yang sudah
-                # ditemukan di halaman pencarian hanya karena
-                # halaman detail gagal dibuka.
+                    # --------------------------------------------
+                    # FILTER TANGGAL
+                    # --------------------------------------------
+                    if end_date and tanggal > end_date:
+                        continue
 
-                # Gunakan tanggal dari CARD sebagai
-                # tanggal utama hasil pencarian.
-                article["Tanggal"] = tanggal.date()
+                    # Karena hasil Kabar Trenggalek diurutkan dari
+                    # terbaru ke terlama, begitu melewati start_date
+                    # kita tidak perlu memproses halaman berikutnya.
+                    if start_date and tanggal < start_date:
+                        stop_scraping = True
+                        break
 
-                # Jika judul detail kosong,
-                # gunakan judul dari card.
-                if not article["Judul"]:
-                    article["Judul"] = title_card
+                    # --------------------------------------------
+                    # KATEGORI
+                    # --------------------------------------------
+                    kategori = ""
 
-                article["Kategori"] = kategori
+                    kategori_tag = card.select_one(
+                        "a.article-card-kicker"
+                    )
 
-                # --------------------------------------------
-                # SIMPAN
-                # --------------------------------------------
+                    if kategori_tag:
+                        kategori = kategori_tag.get_text(
+                            " ",
+                            strip=True
+                        )
 
-                results.append(article)
+                    detail_items.append(
+                        (link, title_card, tanggal, kategori)
+                    )
 
-                print(
-                    f"{tanggal.strftime('%Y-%m-%d')} | "
-                    f"{article['Judul']}"
-                )
+                except Exception as e:
+                    print(f"Gagal membaca card artikel: {e}")
+                    continue
 
-                time.sleep(0.5)
+            # ====================================================
+            # SCRAPE DETAIL SECARA PARALEL
+            # ====================================================
 
-            except Exception as e:
-                print(
-                    f"Gagal mengambil artikel: {e}"
-                )
-                continue
+            if detail_items:
+                futures = [
+                    executor.submit(_scrape_detail_item, item)
+                    for item in detail_items
+                ]
 
-        if stop_scraping:
-            break
+                # executor.map menjaga urutan artikel sesuai card.
+                # Jika satu artikel error, artikel lain tetap diproses.
+                for item, future in zip(detail_items, futures):
+                    try:
+                        article = future.result()
+                        results.append(article)
 
-        # ====================================================
-        # PAGINATION
-        # ====================================================
+                        tanggal = item[2]
+                        print(
+                            f"{tanggal.strftime('%Y-%m-%d')} | "
+                            f"{article['Judul']}"
+                        )
 
-        next_exists = False
+                    except Exception as e:
+                        print(f"Gagal mengambil artikel: {e}")
 
-        for a in soup.select(
-            "nav.site-pagination a"
-        ):
-
-            href = a.get(
-                "href",
-                ""
-            )
-
-            text = a.get_text(
-                " ",
-                strip=True
-            )
-
-            if (
-                f"page={page + 1}" in href
-                or text == "Berikutnya →"
-            ):
-                next_exists = True
+            if stop_scraping:
                 break
 
-        if not next_exists:
-            break
+            # ====================================================
+            # PAGINATION
+            # ====================================================
 
-        page += 1
+            next_exists = False
+
+            for a in soup.select("nav.site-pagination a"):
+                href = a.get("href", "")
+                text = a.get_text(" ", strip=True)
+
+                if (
+                    f"page={page + 1}" in href
+                    or text == "Berikutnya →"
+                ):
+                    next_exists = True
+                    break
+
+            if not next_exists:
+                break
+
+            page += 1
 
     # ========================================================
     # DATAFRAME
@@ -586,7 +577,6 @@ def scrape_search(
     # ========================================================
 
     if not df.empty:
-
         df = df.drop_duplicates(
             subset="Link",
             keep="first"
@@ -597,8 +587,6 @@ def scrape_search(
             ascending=False
         )
 
-        df = df.reset_index(
-            drop=True
-        )
+        df = df.reset_index(drop=True)
 
     return df
