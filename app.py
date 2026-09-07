@@ -639,7 +639,7 @@ st.dataframe(
 st.html(
     """
     <div class="analysis-heading">
-        Analisis Fenomena
+        Grafik Fenomena
     </div>
     """
 )
