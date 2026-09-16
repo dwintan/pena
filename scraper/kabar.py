@@ -155,7 +155,7 @@ def scrape_article(url):
         response = requests.get(
             url,
             headers=HEADERS,
-            timeout=20
+            timeout=10
         )
 
         if response.status_code != 200:
@@ -369,7 +369,7 @@ def scrape_search(
     # Halaman pencarian tetap diambil berurutan, tetapi halaman
     # detail beberapa artikel diambil bersamaan. Ini bagian yang
     # paling banyak memakan waktu pada scraper lama.
-    MAX_WORKERS = 5
+    MAX_WORKERS = 10
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
 
