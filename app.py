@@ -1,10 +1,9 @@
 import os
 from datetime import date
-
+import base64
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-
 from scraper.manager import collect
 from utils.export import to_excel
 
@@ -34,6 +33,19 @@ if os.path.exists(css_path):
             unsafe_allow_html=True
         )
 
+# ============================================================
+# LOAD LOGO BPS
+# ============================================================
+
+logo_path = os.path.join("assets", "logo_bps.png")
+
+logo_base64 = ""
+
+if os.path.exists(logo_path):
+    with open(logo_path, "rb") as img_file:
+        logo_base64 = base64.b64encode(
+            img_file.read()
+        ).decode()
 
 # ============================================================
 # SESSION STATE
@@ -48,6 +60,19 @@ if "data" not in st.session_state:
 # ============================================================
 
 with st.sidebar:
+
+    if logo_base64:
+        st.markdown(
+            f"""
+            <div class="sidebar-logo">
+                <img
+                    src="data:image/png;base64,{logo_base64}"
+                    alt="Logo BPS"
+                >
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     st.markdown(
         """

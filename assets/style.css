@@ -1058,3 +1058,21 @@ div[data-testid="stSpinner"] > div {
     margin-top: 25px !important;
 }
 
+/* ============================================================
+   LOGO BPS
+   ============================================================ */
+
+.sidebar-logo {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 14px;
+}
+
+.sidebar-logo img {
+    width: 185px;
+    height: auto;
+    display: block;
+    object-fit: contain;
+}
