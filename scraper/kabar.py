@@ -43,73 +43,65 @@ BULAN = {
 # ============================================================
 
 def parse_date(text):
-
+    """
+    Parse tanggal Kabar Trenggalek secara robust.
+    Mendukung:
+    - DD-MM-YYYY
+    - DD/MM/YYYY
+    - DD.MM.YYYY
+    - DD-MM-YY
+    - DD Mon YYYY (bulan Indonesia)
+    - teks yang mengandung tanggal, misalnya "09-09-2026 | 10:30 WIB"
+    - "23 jam lalu" / "2 hari lalu"
+    """
     if not text:
         return None
 
-    text = text.strip()
+    text = " ".join(str(text).strip().split())
     now = datetime.now()
 
     # -----------------------------------------
-    # Format: "23 jam lalu"
+    # Format relatif
     # -----------------------------------------
-    match = re.search(
-        r"(\d+)\s+jam lalu",
-        text,
-        re.IGNORECASE
-    )
-
+    match = re.search(r"(\d+)\s+jam\s+lalu", text, re.IGNORECASE)
     if match:
-        return now - timedelta(
-            hours=int(match.group(1))
-        )
+        return now - timedelta(hours=int(match.group(1)))
 
-    # -----------------------------------------
-    # Format: "2 hari lalu"
-    # -----------------------------------------
-    match = re.search(
-        r"(\d+)\s+hari lalu",
-        text,
-        re.IGNORECASE
-    )
-
+    match = re.search(r"(\d+)\s+hari\s+lalu", text, re.IGNORECASE)
     if match:
-        return now - timedelta(
-            days=int(match.group(1))
-        )
+        return now - timedelta(days=int(match.group(1)))
 
     # -----------------------------------------
-    # Format tanggal: DD-MM-YYYY
-    # Contoh: 30-08-2026
+    # Cari tanggal numerik DI DALAM teks.
+    # Ini penting jika tanggal punya tambahan jam/WIB.
     # -----------------------------------------
-    for fmt in (
-        "%d-%m-%Y",
-        "%d/%m/%Y",
-        "%d.%m.%Y"
-    ):
+    match = re.search(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b", text)
+    if match:
         try:
-            return datetime.strptime(text, fmt)
+            hari, bulan, tahun = map(int, match.groups())
+            return datetime(tahun, bulan, hari)
         except ValueError:
             pass
 
     # -----------------------------------------
-    # Format: "12 Agu 2026"
+    # Format tanggal dengan nama bulan Indonesia
+    # Contoh: 12 Agu 2026
     # -----------------------------------------
-    parts = text.split()
+    bulan_map = {k.lower(): v for k, v in BULAN.items()}
 
-    if len(parts) == 3:
+    match = re.search(
+        r"\b(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})\b",
+        text
+    )
+    if match:
         try:
-            hari = int(parts[0])
-            bulan = BULAN.get(parts[1].capitalize())
-            tahun = int(parts[2])
+            hari = int(match.group(1))
+            nama_bulan = match.group(2).lower()
+            tahun = int(match.group(3))
 
+            bulan = bulan_map.get(nama_bulan)
             if bulan:
-                return datetime(
-                    tahun,
-                    bulan,
-                    hari
-                )
-
+                return datetime(tahun, bulan, hari)
         except (ValueError, TypeError):
             pass
 
@@ -322,8 +314,11 @@ def _scrape_detail_item(item):
 
     article = scrape_article(link)
 
-    # Tetap masukkan data dari halaman pencarian jika detail gagal.
-    article["Tanggal"] = tanggal.date()
+    # Tanggal pada CARD adalah tanggal yang sudah lolos filter pencarian.
+    # Gunakan tanggal CARD sebagai sumber utama agar perubahan struktur
+    # halaman detail tidak merusak hasil filtering.
+    if tanggal is not None:
+        article["Tanggal"] = tanggal.date()
 
     if not article["Judul"]:
         article["Judul"] = title_card
@@ -475,12 +470,13 @@ def scrape_search(
                     if end_date and tanggal > end_date:
                         continue
 
-                    # Karena hasil Kabar Trenggalek diurutkan dari
-                    # terbaru ke terlama, begitu melewati start_date
-                    # kita tidak perlu memproses halaman berikutnya.
+                    # Jangan menghentikan pagination hanya karena
+                    # menemukan artikel lama. Hasil pencarian Kabar
+                    # Trenggalek tidak selalu tersusun kronologis antar
+                    # halaman, sehingga artikel September 2026 bisa muncul
+                    # setelah artikel tahun-tahun sebelumnya.
                     if start_date and tanggal < start_date:
-                        stop_scraping = True
-                        break
+                        continue
 
                     # --------------------------------------------
                     # KATEGORI
@@ -571,6 +567,18 @@ def scrape_search(
             "Kategori"
         ]
     )
+
+    # ========================================================
+    # FILTER FINAL RENTANG TANGGAL
+    # ========================================================
+
+    if not df.empty and start_date:
+        df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors="coerce")
+        df = df[df["Tanggal"] >= start_date]
+
+    if not df.empty and end_date:
+        df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors="coerce")
+        df = df[df["Tanggal"] <= end_date]
 
     # ========================================================
     # HAPUS DUPLIKAT + SORTING
